@@ -1,0 +1,23 @@
+{
+  "name": "inventario-pro",
+  "version": "1.0.0",
+  "description": "Sistema de inventario, ventas y precios con control de acceso por usuario",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node src/server.js",
+    "migrate": "knex migrate:latest",
+    "start": "npm run migrate && node src/server.js",
+    "seed": "node db/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "knex": "^3.3.0",
+    "node-cron": "^3.0.3",
+    "pg": "^8.22.0"
+  }
+}
