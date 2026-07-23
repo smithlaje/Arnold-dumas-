@@ -9,6 +9,7 @@ let dashboard = null;
 let pedidos = [];
 let rotacion = [];
 let usuarios = [];
+let historial = [];
 
 let state = {
   screen: 'loading',
@@ -20,6 +21,7 @@ let state = {
   labelProduct: null,
   showAddForm: false,
   showUserForm: false,
+  diasAbiertos: {},
 };
 
 /* ---------------- API HELPER ---------------- */
@@ -90,6 +92,7 @@ async function loadCore() {
 async function loadDashboard() { dashboard = await api('/reportes/dashboard'); }
 async function loadPedidos() { pedidos = await api('/productos/reportes/pedidos'); }
 async function loadRotacion() { rotacion = await api('/reportes/rotacion'); }
+async function loadHistorial() { historial = await api('/reportes/historial-ventas?dias=60'); }
 async function loadUsuarios() { usuarios = await api('/usuarios'); }
 
 function isAdmin() { return currentUser && currentUser.rol === 'ADMIN'; }
@@ -104,6 +107,7 @@ async function setTab(t) {
     if (t === 'precios') { productos = await api('/productos'); config = await api('/config'); }
     if (t === 'pedidos') { await loadPedidos(); }
     if (t === 'reportes') { await loadDashboard(); await loadRotacion(); }
+    if (t === 'historial') { await loadHistorial(); }
     if (t === 'usuarios' && isAdmin()) { await loadUsuarios(); }
   } catch (e) { state.flash = { type: 'err', msg: e.message }; }
   render();
@@ -315,6 +319,7 @@ function render() {
       ${isAdmin() ? tabBtn('precios', 'Precios') : ''}
       ${tabBtn('pedidos', 'Pedidos' + (bajo ? ` <span class="badge">${bajo}</span>` : ''))}
       ${tabBtn('reportes', 'Reportes')}
+      ${tabBtn('historial', 'Historial')}
       ${isAdmin() ? tabBtn('usuarios', 'Usuarios') : ''}
     </nav>
     <div id="tabContent"></div>
@@ -327,6 +332,7 @@ function render() {
   else if (state.tab === 'precios' && isAdmin()) c.innerHTML = renderPrecios();
   else if (state.tab === 'pedidos') c.innerHTML = renderPedidos();
   else if (state.tab === 'reportes') c.innerHTML = renderReportes();
+  else if (state.tab === 'historial') c.innerHTML = renderHistorial();
   else if (state.tab === 'usuarios' && isAdmin()) c.innerHTML = renderUsuarios();
 
   document.getElementById('logoutBtn').onclick = logout;
@@ -626,6 +632,43 @@ function renderReportes() {
   </div>`;
 }
 
+function fmtDiaLargo(fechaISO) {
+  const d = new Date(fechaISO + 'T12:00:00');
+  return d.toLocaleDateString('es-ES', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+}
+function renderHistorial() {
+  const tasa = config.tasa_bcv ? Number(config.tasa_bcv) : null;
+  return `
+  <div class="panel">
+    <h2>Historial de ventas por día</h2>
+    <div class="hint">Últimos 60 días con ventas. Toca un día para ver el detalle de cada venta.</div>
+    ${historial.length === 0 ? '<div class="empty">Aún no hay ventas registradas en este periodo.</div>' : historial.map(dia => {
+      const abierto = !!state.diasAbiertos[dia.fecha];
+      const bs = tasa ? dia.monto * tasa : null;
+      return `
+      <div style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden;">
+        <div data-toggledia="${dia.fecha}" style="cursor:pointer;padding:12px 14px;background:var(--panel2);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div style="font-weight:700;text-transform:capitalize;">${fmtDiaLargo(dia.fecha)}</div>
+            <div style="color:var(--dim);font-size:12px;">${dia.cantidadVentas} venta${dia.cantidadVentas === 1 ? '' : 's'}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="mono" style="font-size:16px;color:var(--amber);">${bs !== null ? 'Bs ' + bs.toFixed(2) : money(dia.monto)}</div>
+            <div style="color:var(--dim);font-size:12px;">${bs !== null ? '≈ ' + money(dia.monto) : ''} · ganancia ${money(dia.ganancia)}</div>
+          </div>
+        </div>
+        ${abierto ? `
+        <table style="margin:0;"><thead><tr><th>Hora</th><th>Producto</th><th>Cant.</th><th>Precio</th><th>Usuario</th></tr></thead>
+        <tbody>${dia.movimientos.map(m => `
+          <tr><td class="mono">${new Date(m.fecha).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</td>
+          <td>${m.producto_nombre}</td><td class="num">${m.cantidad}</td>
+          <td class="num">${money(m.precio_unit * m.cantidad)}</td><td>${m.usuario_nombre || '—'}</td></tr>
+        `).join('')}</tbody></table>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function renderUsuarios() {
   return `
   ${flashHtml()}
@@ -760,8 +803,11 @@ function attachHandlers() {
       const margen = parseFloat(calcMargen.value) || 0;
       const final = costo * (1 + margen / 100);
       const tasa = config.tasa_bcv ? Number(config.tasa_bcv) : null;
-      const bsTxt = tasa ? ` <span style="color:var(--dim);font-size:13px;">(Bs ${(final * tasa).toFixed(2)})</span>` : '';
-      document.getElementById('calcResultado').innerHTML = `<div class="val" style="font-size:18px;">${money(final)}${bsTxt}</div>`;
+      if (tasa) {
+        document.getElementById('calcResultado').innerHTML = `<div class="val" style="font-size:22px;color:var(--amber);">Bs ${(final * tasa).toFixed(2)}</div><div style="color:var(--dim);font-size:13px;margin-top:2px;">≈ ${money(final)}</div>`;
+      } else {
+        document.getElementById('calcResultado').innerHTML = `<div class="val" style="font-size:18px;">${money(final)}</div><div style="color:var(--dim);font-size:12px;margin-top:2px;">Configura la tasa BCV para ver bolívares</div>`;
+      }
     };
     if (calcCosto) { calcCosto.oninput = updateCalc; calcMargen.oninput = updateCalc; }
     const fileInput = document.getElementById('priceFile');
@@ -783,6 +829,16 @@ function attachHandlers() {
       };
     });
     document.querySelectorAll('[data-recalcrow]').forEach(b => { b.onclick = () => recalcRow(b.dataset.recalcrow); });
+  }
+
+  if (state.tab === 'historial') {
+    document.querySelectorAll('[data-toggledia]').forEach(el => {
+      el.onclick = () => {
+        const key = el.dataset.toggledia;
+        state.diasAbiertos[key] = !state.diasAbiertos[key];
+        render();
+      };
+    });
   }
 
   if (state.tab === 'pedidos') {
