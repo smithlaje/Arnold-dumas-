@@ -139,7 +139,7 @@ async function recalcRow(id) {
   try {
     await api('/productos/' + id, {
       method: 'PATCH',
-      body: JSON.stringify({ precioLista: p.precio_lista, pctDescuento: p.pct_descuento })
+      body: JSON.stringify({ precioLista: p.precio_lista, pctDescuento: p.pct_descuento, pctProteccion: p.pct_proteccion })
     });
     productos = await api('/productos');
   } catch (e) { state.flash = { type: 'err', msg: e.message }; }
@@ -172,6 +172,7 @@ async function importProductsFromFile(file) {
         codigo: n['codigo'] || n['codigodebarras'] || n['codigobarras'] || n['barcode'] || n['sku'] || n['ean'] || '',
         nombre: n['nombre'] || n['producto'] || n['descripcion'] || '',
         categoria: n['categoria'] || '',
+        marca: n['marca'] || '',
         precioCompra: n['preciocompra'] || '',
         precioVenta: n['precioventa'] || n['precio'] || '',
         stock: n['stock'] || '',
@@ -395,12 +396,13 @@ function renderInventario() {
         <button class="btn" id="toggleAdd">${state.showAddForm ? 'Cancelar' : '+ Nuevo producto'}</button>
       </div>` : ''}
     </div>
-    ${isAdmin() ? `<div class="hint" style="margin-top:8px;">Importar acepta .csv/.xlsx con columnas: código, nombre, categoría, precio_compra, precio_venta, stock, stock_minimo (solo "nombre" es obligatoria).</div>` : ''}
+    ${isAdmin() ? `<div class="hint" style="margin-top:8px;">Importar acepta .csv/.xlsx con columnas: código, nombre, categoría, marca, precio_compra, precio_venta, stock, stock_minimo (solo "nombre" es obligatoria).</div>` : ''}
     ${state.showAddForm ? `
     <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
-      <div class="row c2">
-        <div><label>Nombre</label><input id="f_nombre" placeholder="Ej. Camiseta azul talla M"></div>
-        <div><label>Categoría</label><input id="f_categoria" placeholder="Ej. Ropa"></div>
+      <div class="row c3">
+        <div><label>Nombre</label><input id="f_nombre" placeholder="Ej. Pastilla de freno delantera"></div>
+        <div><label>Categoría</label><input id="f_categoria" placeholder="Ej. Frenos"></div>
+        <div><label>Marca</label><input id="f_marca" placeholder="Ej. Bosch, Toyota, Genérico"></div>
       </div>
       <div class="row c4">
         <div><label>Precio de compra</label><input id="f_precioCompra" type="number" step="0.01" placeholder="0.00"></div>
@@ -416,13 +418,14 @@ function renderInventario() {
   <div class="panel">
     ${list.length === 0 ? '<div class="empty">No hay productos todavía.</div>' : `
     <table><thead><tr>
-      <th>Código</th><th>Nombre</th><th>Categoría</th><th>Compra</th><th>Venta</th><th>Stock</th><th>Mínimo</th>${isAdmin() ? '<th></th>' : ''}
+      <th>Código</th><th>Nombre</th><th>Categoría</th><th>Marca</th><th>Compra</th><th>Venta</th><th>Stock</th><th>Mínimo</th>${isAdmin() ? '<th></th>' : ''}
     </tr></thead><tbody>
     ${list.map(p => `
       <tr>
         <td class="code mono">${p.barcode}</td>
         <td>${p.nombre}</td>
         <td>${p.categoria}</td>
+        <td>${p.marca || '—'}</td>
         <td class="num">${money(p.precio_compra)}</td>
         <td class="num">${money(p.precio_venta)}</td>
         <td class="num ${p.stock <= p.stock_minimo ? 'low' : ''}">${p.stock}</td>
@@ -515,6 +518,15 @@ function renderPrecios() {
     </div>
   </div>
   <div class="panel">
+    <h2>Calculadora rápida de precio</h2>
+    <div class="hint">Escribe el costo y el margen que quieres ganar — calcula el precio final al momento, en dólares y en bolívares. Es solo una herramienta de apoyo, no modifica ningún producto.</div>
+    <div class="row c3">
+      <div><label>Costo (USD)</label><input id="calcCosto" type="number" step="0.01" placeholder="0.00"></div>
+      <div><label>Margen deseado (%)</label><input id="calcMargen" type="number" step="1" placeholder="30"></div>
+      <div><label>Precio final</label><div id="calcResultado" class="card" style="padding:10px 12px;"><div class="val" style="font-size:18px;">—</div></div></div>
+    </div>
+  </div>
+  <div class="panel">
     <h2>Cargar precios de lista desde archivo</h2>
     <div class="hint">Sube un .csv o .xlsx con una columna de código de barras (o nombre) y una columna de precio de lista.</div>
     <input type="file" id="priceFile" accept=".csv,.xlsx,.xls">
@@ -527,14 +539,15 @@ function renderPrecios() {
       </div>
       <button class="btn ghost" id="recalcAll">Recalcular todos</button>
     </div>
-    <div class="hint">Todas las columnas de precio son editables directamente en la tabla.</div>
+    <div class="hint">Todas las columnas de precio son editables directamente en la tabla. La "Protección cambiaria" es opcional por producto — actívala solo en los que quieras cubrir contra la subida del dólar entre que compras y vendes.</div>
     ${list.length === 0 ? '<div class="empty">No hay productos todavía.</div>' : `
     <table class="pricing"><thead><tr>
-      <th>Código</th><th>Nombre</th>
+      <th>Código</th><th>Nombre</th><th>Marca</th>
       <th>Precio lista (USD)</th><th>% mínimo</th>
       <th>Precio mínimo (USD)</th><th>Margen mín. ($)</th>
       <th>Precio +50% (USD)</th><th>Margen 50% ($)</th>
       <th>% descuento</th><th>Precio oferta (USD)</th><th>Ahorro ($)</th>
+      <th>Protección</th><th>% protección</th><th>Precio protegido (USD)</th>
       <th>Precio lista (Bs)</th><th></th>
     </tr></thead><tbody>
     ${list.map(p => {
@@ -542,9 +555,11 @@ function renderPrecios() {
       const margen50 = (Number(p.precio_50_usd) || 0) - (Number(p.precio_lista) || 0);
       const ahorro = (Number(p.precio_venta) || 0) - (Number(p.precio_oferta_usd) || 0);
       const bs = tasa ? (Number(p.precio_lista) || 0) * tasa : null;
+      const proteccionOn = p.proteccion_activa === true;
       return `<tr>
         <td class="code mono">${p.barcode}</td>
         <td>${p.nombre}</td>
+        <td>${p.marca || '—'}</td>
         <td>${priceInput(p.id, 'precioLista', p.precio_lista)}</td>
         <td>${priceInput(p.id, 'pctMinimo', p.pct_minimo)}</td>
         <td>${priceInput(p.id, 'precioMinimoUSD', p.precio_minimo_usd)}</td>
@@ -554,6 +569,9 @@ function renderPrecios() {
         <td>${priceInput(p.id, 'pctDescuento', p.pct_descuento)}</td>
         <td>${priceInput(p.id, 'precioOfertaUSD', p.precio_oferta_usd)}</td>
         <td class="num">${money(ahorro)}</td>
+        <td style="text-align:center;"><input type="checkbox" data-proteccion="${p.id}" ${proteccionOn ? 'checked' : ''} style="width:18px;height:18px;"></td>
+        <td>${priceInput(p.id, 'pctProteccion', p.pct_proteccion)}</td>
+        <td class="num">${proteccionOn ? money(p.precio_proteccion_usd) : '—'}</td>
         <td class="num">${bs !== null ? 'Bs ' + bs.toFixed(2) : '—'}</td>
         <td><button class="btn ghost small" data-recalcrow="${p.id}" title="Recalcular desde precio de lista">↺</button></td>
       </tr>`;
@@ -685,6 +703,7 @@ function attachHandlers() {
       addProduct({
         nombre,
         categoria: document.getElementById('f_categoria').value,
+        marca: document.getElementById('f_marca').value,
         precioCompra: document.getElementById('f_precioCompra').value,
         precioVenta: document.getElementById('f_precioVenta').value,
         stock: document.getElementById('f_stock').value,
@@ -734,6 +753,17 @@ function attachHandlers() {
       if (!v) { state.flash = { type: 'err', msg: 'Ingresa un valor de tasa válido.' }; render(); return; }
       saveManualTasa(v);
     };
+    const calcCosto = document.getElementById('calcCosto');
+    const calcMargen = document.getElementById('calcMargen');
+    const updateCalc = () => {
+      const costo = parseFloat(calcCosto.value) || 0;
+      const margen = parseFloat(calcMargen.value) || 0;
+      const final = costo * (1 + margen / 100);
+      const tasa = config.tasa_bcv ? Number(config.tasa_bcv) : null;
+      const bsTxt = tasa ? ` <span style="color:var(--dim);font-size:13px;">(Bs ${(final * tasa).toFixed(2)})</span>` : '';
+      document.getElementById('calcResultado').innerHTML = `<div class="val" style="font-size:18px;">${money(final)}${bsTxt}</div>`;
+    };
+    if (calcCosto) { calcCosto.oninput = updateCalc; calcMargen.oninput = updateCalc; }
     const fileInput = document.getElementById('priceFile');
     if (fileInput) fileInput.onchange = (e) => { if (e.target.files[0]) importPreciosFromFile(e.target.files[0]); };
     const defaultPct = document.getElementById('defaultPct');
@@ -742,6 +772,15 @@ function attachHandlers() {
     if (recalcAllBtn) recalcAllBtn.onclick = recalcAll;
     document.querySelectorAll('[data-pricefield]').forEach(inp => {
       inp.onchange = () => updatePriceField(inp.dataset.id, inp.dataset.pricefield, inp.value);
+    });
+    document.querySelectorAll('[data-proteccion]').forEach(cb => {
+      cb.onchange = async () => {
+        try {
+          await api('/productos/' + cb.dataset.proteccion, { method: 'PATCH', body: JSON.stringify({ proteccionActiva: cb.checked }) });
+          productos = await api('/productos');
+        } catch (e) { state.flash = { type: 'err', msg: e.message }; }
+        render();
+      };
     });
     document.querySelectorAll('[data-recalcrow]').forEach(b => { b.onclick = () => recalcRow(b.dataset.recalcrow); });
   }
