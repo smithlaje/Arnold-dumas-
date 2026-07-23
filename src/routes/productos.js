@@ -26,6 +26,13 @@ function recomputeOferta(producto) {
   return { precio_oferta_usd: +(venta * (1 - pct / 100)).toFixed(2) };
 }
 
+function recomputeProteccion(producto) {
+  const lista = Number(producto.precio_lista) || 0;
+  const pct = Number(producto.pct_proteccion) || 0;
+  const activa = producto.proteccion_activa === true || producto.proteccion_activa === 'true' || producto.proteccion_activa === 't';
+  return { precio_proteccion_usd: activa ? +(lista * (1 + pct / 100)).toFixed(2) : lista };
+}
+
 // GET /api/productos — listado completo (ambos roles)
 router.get('/', async (req, res) => {
   const productos = await db('productos').where({ activo: true }).orderBy('nombre');
@@ -41,7 +48,7 @@ router.get('/:barcode', async (req, res) => {
 
 // POST /api/productos — crear (solo ADMIN)
 router.post('/', requireRole('ADMIN'), async (req, res) => {
-  const { nombre, categoria, precioCompra, precioVenta, stock, stockMinimo, barcode } = req.body || {};
+  const { nombre, categoria, marca, precioCompra, precioVenta, stock, stockMinimo, barcode } = req.body || {};
   if (!nombre || !nombre.trim()) return res.status(400).json({ error: 'El nombre es obligatorio.' });
 
   const code = (barcode && barcode.trim()) || genBarcode();
@@ -53,6 +60,7 @@ router.post('/', requireRole('ADMIN'), async (req, res) => {
     barcode: code,
     nombre: nombre.trim(),
     categoria: (categoria || 'General').trim(),
+    marca: (marca || '').trim(),
     precio_compra: Number(precioCompra) || 0,
     precio_venta: Number(precioVenta) || 0,
     stock: parseInt(stock) || 0,
@@ -64,13 +72,15 @@ router.post('/', requireRole('ADMIN'), async (req, res) => {
 
 // PATCH /api/productos/:id — editar campos (solo ADMIN)
 router.patch('/:id', requireRole('ADMIN'), async (req, res) => {
-  const allowed = ['nombre', 'categoria', 'precioCompra', 'precioVenta', 'stock', 'stockMinimo',
-    'precioLista', 'pctMinimo', 'precioMinimoUSD', 'precio50USD', 'pctDescuento', 'precioOfertaUSD'];
+  const allowed = ['nombre', 'categoria', 'marca', 'precioCompra', 'precioVenta', 'stock', 'stockMinimo',
+    'precioLista', 'pctMinimo', 'precioMinimoUSD', 'precio50USD', 'pctDescuento', 'precioOfertaUSD',
+    'pctProteccion', 'proteccionActiva', 'precioProteccionUSD'];
   const map = {
-    nombre: 'nombre', categoria: 'categoria', precioCompra: 'precio_compra', precioVenta: 'precio_venta',
+    nombre: 'nombre', categoria: 'categoria', marca: 'marca', precioCompra: 'precio_compra', precioVenta: 'precio_venta',
     stock: 'stock', stockMinimo: 'stock_minimo', precioLista: 'precio_lista', pctMinimo: 'pct_minimo',
     precioMinimoUSD: 'precio_minimo_usd', precio50USD: 'precio_50_usd',
-    pctDescuento: 'pct_descuento', precioOfertaUSD: 'precio_oferta_usd'
+    pctDescuento: 'pct_descuento', precioOfertaUSD: 'precio_oferta_usd',
+    pctProteccion: 'pct_proteccion', proteccionActiva: 'proteccion_activa', precioProteccionUSD: 'precio_proteccion_usd'
   };
   const update = {};
   for (const key of allowed) {
@@ -80,7 +90,8 @@ router.patch('/:id', requireRole('ADMIN'), async (req, res) => {
 
   const tocaSugerido = update.precio_lista !== undefined || update.pct_minimo !== undefined;
   const tocaOferta = update.precio_venta !== undefined || update.pct_descuento !== undefined;
-  if (tocaSugerido || tocaOferta) {
+  const tocaProteccion = update.precio_lista !== undefined || update.pct_proteccion !== undefined || update.proteccion_activa !== undefined;
+  if (tocaSugerido || tocaOferta || tocaProteccion) {
     const actual = await db('productos').where({ id: req.params.id }).first();
     if (!actual) return res.status(404).json({ error: 'Producto no encontrado.' });
     const merged = { ...actual, ...update };
@@ -93,6 +104,10 @@ router.patch('/:id', requireRole('ADMIN'), async (req, res) => {
     if (tocaOferta) {
       const oferta = recomputeOferta(merged);
       if (req.body.precioOfertaUSD === undefined) update.precio_oferta_usd = oferta.precio_oferta_usd;
+    }
+    if (tocaProteccion) {
+      const proteccion = recomputeProteccion(merged);
+      if (req.body.precioProteccionUSD === undefined) update.precio_proteccion_usd = proteccion.precio_proteccion_usd;
     }
   }
   update.actualizado_en = new Date();
@@ -140,6 +155,7 @@ router.post('/acciones/importar', requireRole('ADMIN'), async (req, res) => {
         nombre,
         categoria: (fila.categoria || 'General').toString().trim() || 'General'
       };
+      if (fila.marca !== undefined && fila.marca !== '') values.marca = fila.marca.toString().trim();
       if (fila.precioCompra !== undefined && fila.precioCompra !== '') values.precio_compra = Number(fila.precioCompra) || 0;
       if (fila.precioVenta !== undefined && fila.precioVenta !== '') values.precio_venta = Number(fila.precioVenta) || 0;
       if (fila.stock !== undefined && fila.stock !== '') values.stock = parseInt(fila.stock) || 0;
@@ -199,10 +215,12 @@ router.post('/acciones/recalcular', requireRole('ADMIN'), async (req, res) => {
     for (const p of productos) {
       const suggested = recomputeSuggested(p, config.pct_minimo_default);
       const oferta = recomputeOferta(p);
+      const proteccion = recomputeProteccion(p);
       await trx('productos').where({ id: p.id }).update({
         precio_minimo_usd: suggested.precio_minimo_usd,
         precio_50_usd: suggested.precio_50_usd,
-        precio_oferta_usd: oferta.precio_oferta_usd
+        precio_oferta_usd: oferta.precio_oferta_usd,
+        precio_proteccion_usd: proteccion.precio_proteccion_usd
       });
     }
   });
