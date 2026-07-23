@@ -46,4 +46,32 @@ router.get('/rotacion', async (req, res) => {
   res.json(rows.map(r => ({ nombre: r.nombre, cantidad: Number(r.cantidad) })));
 });
 
+// GET /api/reportes/historial-ventas?dias=60 — ventas agrupadas por día (para vista tipo calendario)
+router.get('/historial-ventas', async (req, res) => {
+  const dias = Math.min(parseInt(req.query.dias) || 60, 365);
+  const desde = new Date();
+  desde.setDate(desde.getDate() - dias);
+  desde.setHours(0, 0, 0, 0);
+
+  const ventas = await db('movimientos as m')
+    .join('productos as p', 'p.id', 'm.producto_id')
+    .leftJoin('usuarios as u', 'u.id', 'm.usuario_id')
+    .where('m.tipo', 'VENTA')
+    .where('m.fecha', '>=', desde)
+    .select('m.*', 'p.nombre as producto_nombre', 'p.barcode', 'u.nombre as usuario_nombre')
+    .orderBy('m.fecha', 'desc');
+
+  const porDia = {};
+  for (const v of ventas) {
+    const dia = new Date(v.fecha).toISOString().slice(0, 10); // YYYY-MM-DD
+    if (!porDia[dia]) porDia[dia] = { fecha: dia, monto: 0, ganancia: 0, cantidadVentas: 0, movimientos: [] };
+    porDia[dia].monto += Number(v.precio_unit) * v.cantidad;
+    porDia[dia].ganancia += Number(v.ganancia);
+    porDia[dia].cantidadVentas += 1;
+    porDia[dia].movimientos.push(v);
+  }
+  const lista = Object.values(porDia).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  res.json(lista);
+});
+
 module.exports = router;
